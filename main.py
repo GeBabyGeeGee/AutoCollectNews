@@ -26,30 +26,35 @@ client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com/v1"
 # --- 2. 优化后的中英文精准关键词策略 ---
 KEYWORD_STRATEGY = {
     "吹风机": [
-        # 中文关键词
-        '"吹风机" AND ("新技术" OR "新专利" OR "创新设计")',
-        '"高速吹风机" AND ("市场趋势" OR "评测" OR "新品")',
-        # 英文关键词
-        '"hair dryer" AND ("new technology" OR "patent" OR "innovation")',
-        '"hair dryer" AND ("market trend" OR "consumer report")',
-        '"hair dryer" AND ("safety standard update" OR "recall" OR "certification requirements")',
+        # 基础搜索 (保留并优化)
+        '"高速吹风机" AND ("技术创新" OR "新品发布" OR "市场趋势")',
+        '"hair dryer" AND ("new technology" OR "innovation")',
+        # 竞品监控
+        '("Dyson" OR "Laifen" OR "Xiaomi") AND "吹风机" AND ("新品" OR "评测" OR "对比")',
+        # 特定信源 - 专利
+        '"hair dryer" "patent" site:patents.google.com OR site:uspto.gov',
+        # 排除法 - 获取高质量评测，排除销售噪音
+        '"hair dryer" "review" -buy -price -shop',
     ],
     "按摩仪": [
-        # 中文关键词
-        '("筋膜枪" OR "颈部按摩仪") AND ("新品" OR "技术升级" OR "评测")',
-        '"按摩设备" AND "医疗器械认证"',
-        # 英文关键词
-        '"massage gun" AND ("new release" OR "review" OR "innovation")',
-        '"percussive therapy" AND ("health benefits" OR "clinical study")',
-        '"massage device" AND "medical certification"',
+        # 基础搜索
+        '("筋膜枪" OR "颈部按摩仪") AND ("技术升级" OR "新品")',
+        '"massage gun" AND ("new release" OR "review")',
+        # 竞品监控
+        '("Therabody" OR "Hyperice") AND ("new product" OR "technology")',
+        # 特定信源 - 健康与法规
+        '"percussive therapy" "clinical study" OR "health benefits"',
+        '"massage device" "FDA clearance" site:fda.gov',
     ],
     "美容仪": [
-        # 中文关键词
-        '("射频美容仪" OR "微电流美容仪") AND ("技术突破" OR "专利" OR "新品")',
-        '"家用美容仪" AND ("行业报告" OR "市场分析" OR "监管新规")',
-        # 英文关键词
-        '"RF beauty device" OR "microcurrent device" AND ("new" OR "FDA clearance" OR "clinical trial")',
-        '"anti-aging device" AND ("market share" OR "forecast" OR "home use")',
+        # 基础搜索
+        '("射频美容仪" OR "微电流美容仪") AND ("技术突破" OR "专利")',
+        '"RF beauty device" OR "microcurrent device" AND "clinical trial"',
+        # 竞品监控
+        '("TriPollar" OR "FOREO" OR "NuFACE" OR "AMIRO") AND ("新品" OR "技术")',
+        # 市场与法规
+        '"家用美容仪" AND ("行业报告" OR "监管新规")',
+        '"at-home beauty device" "market trend" OR "forecast"',
     ]
 }
 
@@ -104,7 +109,24 @@ def save_to_db(news_items):
     conn.commit()
     conn.close()
 
-# --- 4. API 调用 (保持不变) ---
+# --- 4. API 调用与链接检查 ---
+
+def is_url_accessible(url):
+    """
+    通过发送一个轻量的HEAD请求来检查URL是否可访问。
+    返回 True 表示链接有效，False 表示链接失效或访问出错。
+    """
+    try:
+        # 使用HEAD请求，只获取响应头，不下载整个页面，速度更快
+        response = requests.head(url, allow_redirects=True, timeout=10)
+        # 认为400及以上的状态码都是有问题的链接
+        if response.status_code >= 400:
+            return False
+        return True
+    except requests.exceptions.RequestException:
+        # 捕获所有请求相关的异常，如超时、DNS错误、连接错误等
+        return False
+
 def search_google(query):
     """
     调用Google Search API (增强版：强制按日期排序并限定时间范围)
@@ -131,7 +153,7 @@ def search_google(query):
 def analyze_with_deepseek(title, snippet, sub_category):
     """第一阶段AI：提取信息"""
     prompt = f"""
-    你是一位专业的“个护小家电”行业分析师。请根据以下新闻信息，完成任务：
+    你是一位专业的行业分析师。请根据以下新闻信息，完成任务：
     1. **分类**: 将其归类到最合适的类别：[技术创新, 产品发布, 市场趋势, 法规认证, 用户反馈, 企业动态, 其他]。
     2. **总结**: 用不超过150字的中文，精准总结其核心内容。
     3. **关键词**: 提取3-5个最核心的关键词。
@@ -153,9 +175,9 @@ def analyze_with_deepseek(title, snippet, sub_category):
 def evaluate_operational_value(summary, sub_category):
     """第二阶段AI：评估运营价值"""
     prompt = f"""
-    你是一位专注于“个护小家电”领域的资深社交媒体运营策略师。请评估以下新闻摘要对于公司的内容创作、营销活动的启发和帮助程度。
+    你是一位资深社交媒体运营策略师。请评估以下新闻摘要对于公司的内容创作、营销活动的启发和帮助程度。
     评估标准:
-    - 高价值(8-10分): 颠覆性技术、重要法规、直接竞品重大动向、可直接转化为爆款内容的消费者痛点或市场趋势。
+    - 高价值(8-10分): 颠覆性技术、重要法规、直接竞品重大动向、可直接转化为用于专业行业分析的内容。
     - 中等价值(4-7分): 常规技术更新、产品发布、可作参考的市场数据。
     - 低价值(1-3分): 信息模糊、关联度低、过于宽泛或陈旧。
     任务:
@@ -176,7 +198,7 @@ def evaluate_operational_value(summary, sub_category):
     except Exception:
         return None
 
-# --- 5. 核心工作流 (保持不变) ---
+# --- 5. 核心工作流 (已加入链接检查) ---
 def process_article(article_info):
     """单个线程的工作单元：提取信息 + 价值评估"""
     try:
@@ -218,11 +240,21 @@ def job():
     existing_urls = get_existing_urls()
     tasks_to_process = []
     all_queries = [{'sub_cat': sc, 'query': q} for sc, qs in KEYWORD_STRATEGY.items() for q in qs]
+    
     for task in tqdm(all_queries, desc="Searching Google"):
         search_results = search_google(task['query'])
         for item in search_results:
             url = item.get('link')
-            if not url or url in existing_urls: continue
+            
+            # 检查URL是否存在或已在数据库中
+            if not url or url in existing_urls:
+                continue
+            
+            # --- 新增：检查链接有效性 ---
+            if not is_url_accessible(url):
+                # 使用tqdm.write可以在不打乱进度条的情况下打印信息
+                tqdm.write(f"[Skipping] Inaccessible link: {url}")
+                continue
             
             pagemap = item.get('pagemap', {})
             metatags = pagemap.get('metatags', [{}])[0]
@@ -234,14 +266,14 @@ def job():
                 'displayLink': item.get('displayLink'), 'publish_date': publish_date,
                 'author': author, 'sub_category': task['sub_cat']
             })
-            existing_urls.add(url)
+            existing_urls.add(url) # 即使是待处理，也先加入，防止重复
         time.sleep(1)
 
     if not tasks_to_process:
-        print("No new articles found. Job finished.")
+        print("No new valid articles found. Job finished.")
         return
 
-    print(f"\nFound {len(tasks_to_process)} new articles to process.")
+    print(f"\nFound {len(tasks_to_process)} new valid articles to process.")
     
     print("Phase 2: Analyzing and evaluating articles in parallel...")
     processed_items = []
