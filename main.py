@@ -5,8 +5,8 @@ import time
 import concurrent.futures
 from tqdm import tqdm
 from openai import OpenAI
-import os  # 引入 os 库
-from dotenv import load_dotenv # 引入 dotenv 库
+import os
+from dotenv import load_dotenv
 
 # 加载 .env 文件中的环境变量
 load_dotenv()
@@ -23,29 +23,38 @@ if not all([GOOGLE_API_KEY, SEARCH_ENGINE_ID, DEEPSEEK_API_KEY]):
 # DeepSeek API 客户端
 client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com/v1")
 
-# --- 2. 精准关键词策略 ---
+# --- 2. 优化后的中英文精准关键词策略 ---
 KEYWORD_STRATEGY = {
     "吹风机": [
-        '("负离子" OR "高速" OR "智能温控") "吹风机" "新技术"',
-        '"hair dryer" "new technology" OR "patent"',
-        '"吹风机" "市场趋势" OR "消费者报告"',
-        '"hair dryer" "safety standards" OR "certification" (CE OR FCC OR UL)',
+        # 中文关键词
+        '"吹风机" AND ("新技术" OR "新专利" OR "创新设计")',
+        '"高速吹风机" AND ("市场趋势" OR "评测" OR "新品")',
+        # 英文关键词
+        '"hair dryer" AND ("new technology" OR "patent" OR "innovation")',
+        '"hair dryer" AND ("market trend" OR "consumer report")',
+        '"hair dryer" AND ("safety standard update" OR "recall" OR "certification requirements")',
     ],
     "按摩仪": [
-        '("筋膜枪" OR "颈部按摩仪" OR "眼部按摩仪") "新品发布" OR "技术升级"',
-        '"massage gun" OR "neck massager" "review" OR "innovation"',
-        '"按摩设备" "医疗器械认证" OR "注册标准"',
-        '"percussive therapy" OR "TENS" "health benefits"',
+        # 中文关键词
+        '("筋膜枪" OR "颈部按摩仪") AND ("新品" OR "技术升级" OR "评测")',
+        '"按摩设备" AND "医疗器械认证"',
+        # 英文关键词
+        '"massage gun" AND ("new release" OR "review" OR "innovation")',
+        '"percussive therapy" AND ("health benefits" OR "clinical study")',
+        '"massage device" AND "medical certification"',
     ],
     "美容仪": [
-        '("射频" OR "微电流" OR "LED光疗") "美容仪" "临床效果" OR "技术专利"',
-        '"beauty device" OR "RF" OR "microcurrent" "FDA clearance" OR "new"',
-        '"家用美容仪" "行业报告" OR "监管政策"',
-        '"anti-aging device" "market trends"',
+        # 中文关键词
+        '("射频美容仪" OR "微电流美容仪") AND ("技术突破" OR "专利" OR "新品")',
+        '"家用美容仪" AND ("行业报告" OR "市场分析" OR "监管新规")',
+        # 英文关键词
+        '"RF beauty device" OR "microcurrent device" AND ("new" OR "FDA clearance" OR "clinical trial")',
+        '"anti-aging device" AND ("market share" OR "forecast" OR "home use")',
     ]
 }
 
-# --- 3. 数据库操作 (包含价值评估字段) ---
+
+# --- 3. 数据库操作 (保持不变) ---
 def setup_database():
     """初始化数据库和表 (增加价值评估字段)"""
     conn = sqlite3.connect(DB_FILE)
@@ -95,7 +104,7 @@ def save_to_db(news_items):
     conn.commit()
     conn.close()
 
-# --- 4. API 调用 (包含两阶段AI处理) ---
+# --- 4. API 调用 (保持不变) ---
 def search_google(query):
     """
     调用Google Search API (增强版：强制按日期排序并限定时间范围)
@@ -107,8 +116,8 @@ def search_google(query):
         'cx': SEARCH_ENGINE_ID, 
         'q': query, 
         'num': 10,
-        'sort': 'date',                       # 新增：按日期排序
-        'dateRestrict': 'm1'                  # 新增：限制在一个月内
+        'sort': 'date',
+        'dateRestrict': 'm1'
     }
     
     try:
@@ -146,8 +155,8 @@ def evaluate_operational_value(summary, sub_category):
     prompt = f"""
     你是一位专注于“个护小家电”领域的资深社交媒体运营策略师。请评估以下新闻摘要对于公司的内容创作、营销活动的启发和帮助程度。
     评估标准:
-    - 高价值(7-10分): 颠覆性技术、重要法规、直接竞品重大动向、可直接转化为爆款内容的消费者痛点或市场趋势。
-    - 中等价值(4-6分): 常规技术更新、产品发布、可作参考的市场数据。
+    - 高价值(8-10分): 颠覆性技术、重要法规、直接竞品重大动向、可直接转化为爆款内容的消费者痛点或市场趋势。
+    - 中等价值(4-7分): 常规技术更新、产品发布、可作参考的市场数据。
     - 低价值(1-3分): 信息模糊、关联度低、过于宽泛或陈旧。
     任务:
     1.  **打分:** 给出1-10分的“运营价值分数”。
@@ -167,7 +176,7 @@ def evaluate_operational_value(summary, sub_category):
     except Exception:
         return None
 
-# --- 5. 核心工作流 ---
+# --- 5. 核心工作流 (保持不变) ---
 def process_article(article_info):
     """单个线程的工作单元：提取信息 + 价值评估"""
     try:
