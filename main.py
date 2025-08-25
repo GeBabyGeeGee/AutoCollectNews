@@ -23,10 +23,10 @@ if not all([GOOGLE_API_KEY, SEARCH_ENGINE_ID, DEEPSEEK_API_KEY]):
 # DeepSeek API 客户端
 client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com/v1")
 
-# --- 2. 优化后的中英文精准关键词策略 ---
+# --- 2. 优化后的多维度、中英文精准关键词策略 ---
 KEYWORD_STRATEGY = {
     "吹风机": [
-        # 基础搜索 (保留并优化)
+        # 基础搜索
         '"高速吹风机" AND ("技术创新" OR "新品发布" OR "市场趋势")',
         '"hair dryer" AND ("new technology" OR "innovation")',
         # 竞品监控
@@ -58,10 +58,9 @@ KEYWORD_STRATEGY = {
     ]
 }
 
-
 # --- 3. 数据库操作 (保持不变) ---
 def setup_database():
-    """初始化数据库和表 (增加价值评估字段)"""
+    """初始化数据库和表"""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute('''
@@ -76,8 +75,8 @@ def setup_database():
         category TEXT,
         summary TEXT,
         keywords TEXT,
-        value_score INTEGER,        -- 新增: 运营价值分数 (1-10)
-        value_reason TEXT,          -- 新增: 评估理由
+        value_score INTEGER,
+        value_reason TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     ''')
@@ -109,39 +108,29 @@ def save_to_db(news_items):
     conn.commit()
     conn.close()
 
-# --- 4. API 调用与链接检查 ---
+# --- 4. API 调用、链接检查与信息提取 ---
 
 def is_url_accessible(url):
     """
     通过发送一个轻量的HEAD请求来检查URL是否可访问。
-    返回 True 表示链接有效，False 表示链接失效或访问出错。
     """
     try:
-        # 使用HEAD请求，只获取响应头，不下载整个页面，速度更快
         response = requests.head(url, allow_redirects=True, timeout=10)
-        # 认为400及以上的状态码都是有问题的链接
-        if response.status_code >= 400:
-            return False
-        return True
+        return response.status_code < 400
     except requests.exceptions.RequestException:
-        # 捕获所有请求相关的异常，如超时、DNS错误、连接错误等
         return False
 
 def search_google(query):
-    """
-    调用Google Search API (增强版：强制按日期排序并限定时间范围)
-    """
+    """调用Google Search API"""
     url = "https://www.googleapis.com/customsearch/v1"
-    
     params = {
-        'key': GOOGLE_API_KEY, 
-        'cx': SEARCH_ENGINE_ID, 
-        'q': query, 
+        'key': GOOGLE_API_KEY,
+        'cx': SEARCH_ENGINE_ID,
+        'q': query,
         'num': 10,
         'sort': 'date',
         'dateRestrict': 'm1'
     }
-    
     try:
         response = requests.get(url, params=params, timeout=15)
         response.raise_for_status()
@@ -150,10 +139,34 @@ def search_google(query):
         print(f"\nError searching Google for '{query}': {e}")
         return []
 
+def extract_metadata(item):
+    """
+    从Google搜索结果中提取元数据，特别是更稳健地提取发布日期。
+    """
+    pagemap = item.get('pagemap', {})
+    metatags = pagemap.get('metatags', [{}])[0]
+    
+    # 增强的日期提取逻辑
+    date_keys = [
+        'article:published_time', 'publishdate', 'date', 
+        'og:updated_time', 'dc.date.issued', 'lastmod'
+    ]
+    publish_date = '未知'
+    for key in date_keys:
+        date_str = metatags.get(key)
+        if date_str:
+            # 取日期部分，忽略时间戳
+            publish_date = date_str.split('T')[0]
+            break
+            
+    author = metatags.get('author') or metatags.get('article:author') or '未知'
+    
+    return publish_date, author
+
 def analyze_with_deepseek(title, snippet, sub_category):
     """第一阶段AI：提取信息"""
     prompt = f"""
-    你是一位专业的行业分析师。请根据以下新闻信息，完成任务：
+    你是一位专业的“个护小家电”行业分析师。请根据以下新闻信息，完成任务：
     1. **分类**: 将其归类到最合适的类别：[技术创新, 产品发布, 市场趋势, 法规认证, 用户反馈, 企业动态, 其他]。
     2. **总结**: 用不超过150字的中文，精准总结其核心内容。
     3. **关键词**: 提取3-5个最核心的关键词。
@@ -175,9 +188,9 @@ def analyze_with_deepseek(title, snippet, sub_category):
 def evaluate_operational_value(summary, sub_category):
     """第二阶段AI：评估运营价值"""
     prompt = f"""
-    你是一位资深社交媒体运营策略师。请评估以下新闻摘要对于公司的内容创作、营销活动的启发和帮助程度。
+    你是一位专注于“个护小家电”领域的资深社交媒体运营策略师。请评估以下新闻摘要对于公司的内容创作、营销活动的启发和帮助程度。
     评估标准:
-    - 高价值(8-10分): 颠覆性技术、重要法规、直接竞品重大动向、可直接转化为用于专业行业分析的内容。
+    - 高价值(8-10分): 颠覆性技术、重要法规、直接竞品重大动向、可直接转化为爆款内容的消费者痛点或市场趋势。
     - 中等价值(4-7分): 常规技术更新、产品发布、可作参考的市场数据。
     - 低价值(1-3分): 信息模糊、关联度低、过于宽泛或陈旧。
     任务:
@@ -198,7 +211,7 @@ def evaluate_operational_value(summary, sub_category):
     except Exception:
         return None
 
-# --- 5. 核心工作流 (已加入链接检查) ---
+# --- 5. 核心工作流 ---
 def process_article(article_info):
     """单个线程的工作单元：提取信息 + 价值评估"""
     try:
@@ -246,27 +259,21 @@ def job():
         for item in search_results:
             url = item.get('link')
             
-            # 检查URL是否存在或已在数据库中
             if not url or url in existing_urls:
                 continue
             
-            # --- 新增：检查链接有效性 ---
             if not is_url_accessible(url):
-                # 使用tqdm.write可以在不打乱进度条的情况下打印信息
                 tqdm.write(f"[Skipping] Inaccessible link: {url}")
                 continue
             
-            pagemap = item.get('pagemap', {})
-            metatags = pagemap.get('metatags', [{}])[0]
-            publish_date = (metatags.get('article:published_time') or metatags.get('publishdate') or metatags.get('og:updated_time', '')).split('T')[0]
-            author = metatags.get('author') or metatags.get('article:author')
+            publish_date, author = extract_metadata(item)
 
             tasks_to_process.append({
                 'title': item.get('title'), 'snippet': item.get('snippet'), 'url': url,
                 'displayLink': item.get('displayLink'), 'publish_date': publish_date,
                 'author': author, 'sub_category': task['sub_cat']
             })
-            existing_urls.add(url) # 即使是待处理，也先加入，防止重复
+            existing_urls.add(url)
         time.sleep(1)
 
     if not tasks_to_process:
@@ -292,7 +299,6 @@ def job():
         print("\nNo articles were successfully processed.")
 
     print(f"[{time.ctime()}] Job finished.")
-
 
 # --- 6. 启动任务 ---
 if __name__ == "__main__":
