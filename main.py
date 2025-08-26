@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 
 # 加载 .env 文件中的环境变量
 load_dotenv()
+
 # --- 1. 配置信息 ---
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 SEARCH_ENGINE_ID = os.getenv("SEARCH_ENGINE_ID")
@@ -23,42 +24,60 @@ if not all([GOOGLE_API_KEY, SEARCH_ENGINE_ID, DEEPSEEK_API_KEY]):
 # DeepSeek API 客户端
 client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com/v1")
 
-# --- 2. 优化后的多维度、中英文精准关键词策略 ---
-KEYWORD_STRATEGY = {
+
+# --- 2. “三层情报雷达”关键词策略 ---
+
+# 第一层：核心监控层 (高精准度，低噪音)
+CORE_KEYWORDS = {
     "吹风机": [
-        # 基础搜索
         '"高速吹风机" AND ("技术创新" OR "新品发布" OR "市场趋势")',
         '"hair dryer" AND ("new technology" OR "innovation")',
-        # 竞品监控
-        '("Dyson" OR "Laifen" OR "Xiaomi") AND "吹风机" AND ("新品" OR "评测" OR "对比")',
-        # 特定信源 - 专利
-        '"hair dryer" "patent" site:patents.google.com OR site:uspto.gov',
-        # 排除法 - 获取高质量评测，排除销售噪音
-        '"hair dryer" "review" -buy -price -shop',
+        '("戴森" OR "徕芬" OR "小米") AND "吹风机" AND ("新品" OR "评测")',
+        '"hair dryer" "patent" site:patents.google.com',
     ],
     "按摩仪": [
-        # 基础搜索
         '("筋膜枪" OR "颈部按摩仪") AND ("技术升级" OR "新品")',
         '"massage gun" AND ("new release" OR "review")',
-        # 竞品监控
         '("Therabody" OR "Hyperice") AND ("new product" OR "technology")',
-        # 特定信源 - 健康与法规
-        '"percussive therapy" "clinical study" OR "health benefits"',
         '"massage device" "FDA clearance" site:fda.gov',
     ],
     "美容仪": [
-        # 基础搜索
         '("射频美容仪" OR "微电流美容仪") AND ("技术突破" OR "专利")',
         '"RF beauty device" OR "microcurrent device" AND "clinical trial"',
-        # 竞品监控
-        '("TriPollar" OR "FOREO" OR "NuFACE" OR "AMIRO") AND ("新品" OR "技术")',
-        # 市场与法规
+        '("TriPollar" OR "FOREO" OR "NuFACE" OR "雅萌") AND ("新品" OR "技术")',
         '"家用美容仪" AND ("行业报告" OR "监管新规")',
-        '"at-home beauty device" "market trend" OR "forecast"',
     ]
 }
 
-# --- 3. 数据库操作 (保持不变) ---
+# 第二层：广域探索层 (中等相关性，用于发现新趋势)
+EXPLORATORY_KEYWORDS = {
+    "前沿趋势": [
+        '("AI" OR "人工智能") AND ("美容" OR "个护" OR "肤质检测")',
+        '("可持续" OR "环保") AND ("美妆个护" OR "包装")',
+        '("生物科技" OR "基因") AND "护肤"',
+        '"个性化定制" AND "护发"',
+        '"smart mirror" OR "智能镜" AND "skin analysis"',
+    ]
+}
+
+# 第三层：信源巡航层 (不依赖特定关键词，全面扫描高质量信源)
+SOURCE_DRIVEN_KEYWORDS = {
+    "行业动态": [
+        # 科技媒体
+        '("个护" OR "美容" OR "家电") site:36kr.com',
+        '("个护" OR "美容" OR "家电") site:pingwest.com',
+        '("个护" OR "美容" OR "家电") site:geekpark.net',
+        # 时尚与消费媒体
+        '("美容仪" OR "黑科技") site:vogue.com.cn',
+        '("护肤" OR "新科技") site:ellechina.com',
+        # 英文科技媒体
+        '"beauty tech" OR "personal care" site:techcrunch.com',
+        '"beauty tech" OR "personal care" site:theverge.com',
+    ]
+}
+
+
+# --- 3. 数据库操作 ---
 def setup_database():
     """初始化数据库和表"""
     conn = sqlite3.connect(DB_FILE)
@@ -94,6 +113,8 @@ def get_existing_urls():
 
 def save_to_db(news_items):
     """批量保存包含评估结果的新闻数据到数据库"""
+    if not news_items:
+        return
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.executemany('''
@@ -108,12 +129,10 @@ def save_to_db(news_items):
     conn.commit()
     conn.close()
 
-# --- 4. API 调用、链接检查与信息提取 ---
 
+# --- 4. API 调用、链接检查与信息提取 ---
 def is_url_accessible(url):
-    """
-    通过发送一个轻量的HEAD请求来检查URL是否可访问。
-    """
+    """通过发送一个轻量的HEAD请求来检查URL是否可访问"""
     try:
         response = requests.head(url, allow_redirects=True, timeout=10)
         return response.status_code < 400
@@ -121,7 +140,7 @@ def is_url_accessible(url):
         return False
 
 def search_google(query):
-    """调用Google Search API"""
+    """调用Google Search API，并增加日期限制和错误处理"""
     url = "https://www.googleapis.com/customsearch/v1"
     params = {
         'key': GOOGLE_API_KEY,
@@ -136,35 +155,28 @@ def search_google(query):
         response.raise_for_status()
         return response.json().get('items', [])
     except requests.exceptions.RequestException as e:
-        print(f"\nError searching Google for '{query}': {e}")
+        print(f"\n[Error] Google搜索请求失败 '{query}': {e}")
+        return []
+    except json.JSONDecodeError:
+        print(f"\n[Error] 解析Google搜索结果失败 for query: '{query}'")
         return []
 
 def extract_metadata(item):
-    """
-    从Google搜索结果中提取元数据，特别是更稳健地提取发布日期。
-    """
+    """从Google搜索结果中更稳健地提取元数据"""
     pagemap = item.get('pagemap', {})
     metatags = pagemap.get('metatags', [{}])[0]
-    
-    # 增强的日期提取逻辑
-    date_keys = [
-        'article:published_time', 'publishdate', 'date', 
-        'og:updated_time', 'dc.date.issued', 'lastmod'
-    ]
+    date_keys = ['article:published_time', 'publishdate', 'date', 'og:updated_time', 'dc.date.issued', 'lastmod']
     publish_date = '未知'
     for key in date_keys:
         date_str = metatags.get(key)
         if date_str:
-            # 取日期部分，忽略时间戳
             publish_date = date_str.split('T')[0]
             break
-            
     author = metatags.get('author') or metatags.get('article:author') or '未知'
-    
     return publish_date, author
 
-def analyze_with_deepseek(title, snippet, sub_category):
-    """第一阶段AI：提取信息"""
+def analyze_with_deepseek(title, snippet):
+    """第一阶段AI：提取信息和分类"""
     prompt = f"""
     你是一位专业的“个护小家电”行业分析师。请根据以下新闻信息，完成任务：
     1. **分类**: 将其归类到最合适的类别：[技术创新, 产品发布, 市场趋势, 法规认证, 用户反馈, 企业动态, 其他]。
@@ -198,7 +210,7 @@ def evaluate_operational_value(summary, sub_category):
     2.  **说明理由:** 用一句话简明扼要地解释打分原因。
     请严格按照JSON格式返回：{{"score": <分数>, "reason": "..."}}
     ---
-    产品品类: {sub_category}
+    产品品类/主题: {sub_category}
     新闻摘要: {summary}
     ---
     """
@@ -211,6 +223,7 @@ def evaluate_operational_value(summary, sub_category):
     except Exception:
         return None
 
+
 # --- 5. 核心工作流 ---
 def process_article(article_info):
     """单个线程的工作单元：提取信息 + 价值评估"""
@@ -220,7 +233,7 @@ def process_article(article_info):
         sub_cat = article_info.get('sub_category')
 
         # 第一阶段: 信息提取
-        analysis_str = analyze_with_deepseek(title, snippet, sub_cat)
+        analysis_str = analyze_with_deepseek(title, snippet)
         if not analysis_str: return None
         analysis = json.loads(analysis_str)
         summary = analysis.get('summary', '')
@@ -242,19 +255,24 @@ def process_article(article_info):
             "keywords": ", ".join(analysis.get('keywords', [])),
             "value_score": value_score, "value_reason": value_reason
         }
-    except Exception:
+    except (json.JSONDecodeError, KeyError, Exception):
         return None
 
 def job():
     """并行工作流主函数"""
-    print(f"[{time.ctime()}] Starting parallel news job with value assessment...")
+    print(f"[{time.ctime()}] 开始执行新闻采集与评估任务...")
     
-    print("Phase 1: Gathering all new articles...")
+    print("Phase 1: 正在从Google搜索新文章 (采用三层雷达策略)...")
     existing_urls = get_existing_urls()
     tasks_to_process = []
-    all_queries = [{'sub_cat': sc, 'query': q} for sc, qs in KEYWORD_STRATEGY.items() for q in qs]
     
-    for task in tqdm(all_queries, desc="Searching Google"):
+    all_queries = []
+    for strategy_dict in [CORE_KEYWORDS, EXPLORATORY_KEYWORDS, SOURCE_DRIVEN_KEYWORDS]:
+        for sub_cat, queries in strategy_dict.items():
+            for query in queries:
+                all_queries.append({'sub_cat': sub_cat, 'query': query})
+
+    for task in tqdm(all_queries, desc="Google Searching"):
         search_results = search_google(task['query'])
         for item in search_results:
             url = item.get('link')
@@ -263,7 +281,7 @@ def job():
                 continue
             
             if not is_url_accessible(url):
-                tqdm.write(f"[Skipping] Inaccessible link: {url}")
+                tqdm.write(f"[跳过] 链接无法访问: {url}")
                 continue
             
             publish_date, author = extract_metadata(item)
@@ -274,15 +292,15 @@ def job():
                 'author': author, 'sub_category': task['sub_cat']
             })
             existing_urls.add(url)
-        time.sleep(1)
+        time.sleep(1) 
 
     if not tasks_to_process:
-        print("No new valid articles found. Job finished.")
+        print("\n没有发现新的有效文章。任务结束。")
         return
 
-    print(f"\nFound {len(tasks_to_process)} new valid articles to process.")
+    print(f"\n发现 {len(tasks_to_process)} 篇新的有效文章，准备进行AI分析...")
     
-    print("Phase 2: Analyzing and evaluating articles in parallel...")
+    print("Phase 2: 正在并行处理文章 (AI分析与评估)...")
     processed_items = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
         future_to_article = {executor.submit(process_article, task): task for task in tasks_to_process}
@@ -292,16 +310,17 @@ def job():
                 processed_items.append(result)
 
     if processed_items:
-        print(f"\nPhase 3: Saving {len(processed_items)} processed articles to database...")
+        print(f"\nPhase 3: 成功处理 {len(processed_items)} 篇文章，正在存入数据库...")
         save_to_db(processed_items)
-        print("All new articles have been saved.")
+        print("所有新文章已保存。")
     else:
-        print("\nNo articles were successfully processed.")
+        print("\n没有文章被成功处理。")
 
-    print(f"[{time.ctime()}] Job finished.")
+    print(f"[{time.ctime()}] 任务执行完毕。")
+
 
 # --- 6. 启动任务 ---
 if __name__ == "__main__":
-    print("Initializing database...")
+    print("正在初始化数据库...")
     setup_database()
     job()
