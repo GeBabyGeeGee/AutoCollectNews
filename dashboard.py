@@ -1,28 +1,28 @@
 import streamlit as st
 import pandas as pd
-from sqlalchemy import create_engine # <-- 从 sqlalchemy 导入
+import sqlite3 # <-- 改回使用 sqlite3
 from datetime import datetime, timedelta
 
 # --- 1. 配置信息 ---
-# 数据库连接现在通过 Streamlit Secrets 管理
+DB_FILE = "News.db" # <-- 指定本地数据库文件名
 
 # --- 函数：加载本地CSS文件 ---
 def local_css(file_name):
-    with open(file_name, "r", encoding="utf-8") as f: # <--- 解决方案：明确指定 encoding="utf-8"
+    # 增加编码以修复 Windows 上的 bug
+    with open(file_name, "r", encoding="utf-8") as f:
         st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
 
-
-# --- 2. 数据加载 ---
+# --- 2. 数据加载 (*** 已改回读取本地 SQLite 文件 ***) ---
 @st.cache_data(ttl=300) # 每5分钟刷新一次数据
 def load_data():
     try:
-        # 从 Streamlit Secrets 安全地获取数据库连接信息
-        db_url = st.secrets["connections"]["supabase"]["url"]
-        engine = create_engine(db_url)
+        # 连接本地的 SQLite 数据库文件
+        conn = sqlite3.connect(DB_FILE)
+        # 默认按录入时间倒序读取，这样就不用在后面排序了
+        df = pd.read_sql_query("SELECT * FROM news ORDER BY created_at DESC", conn)
+        conn.close()
         
-        df = pd.read_sql("SELECT * FROM news ORDER BY created_at DESC", engine)
-        
-        # --- 数据类型转换和清洗 ---
+        # --- 数据类型转换和清洗 (保持不变) ---
         df['created_at'] = pd.to_datetime(df['created_at'])
         df.fillna({
             'publish_date': '未知', 'author': '未知',
@@ -32,18 +32,19 @@ def load_data():
         df['value_score'] = df['value_score'].astype(int)
         return df
     except Exception as e:
-        # 捕获secrets未配置的错误，提供友好提示
-        if "connections.supabase" in str(e):
-             st.error("数据库连接信息未配置。请在Streamlit Cloud的Secrets中设置 `[connections.supabase]`。")
-        else:
-            st.error(f"加载云数据库失败: {e}")
+        st.error(f"加载本地数据库 '{DB_FILE}' 失败: {e}")
+        st.info("请确保 `News.db`文件与 `dashboard.py` 在同一个文件夹下，并且您已经运行过 `main.py` 来采集数据。")
         return pd.DataFrame()
 
 # --- 3. 页面布局与标题 ---
 st.set_page_config(page_title="个护行业智能情报库", layout="wide")
 
-# 加载自定义CSS
-local_css("style.css")
+# 加载自定义CSS (请确保 style.css 文件存在)
+try:
+    local_css("style.css")
+except FileNotFoundError:
+    st.warning("`style.css` 文件未找到。应用将以默认样式显示。")
+
 
 st.title("💡 个护行业智能情报库")
 st.markdown("<sub>由AI评估运营价值，助您快速锁定核心动态</sub>", unsafe_allow_html=True)
@@ -51,7 +52,7 @@ st.markdown("<sub>由AI评估运营价值，助您快速锁定核心动态</sub>
 df = load_data()
 
 if df.empty:
-    st.warning("数据库中还没有数据，或数据加载失败。")
+    st.warning(f"数据库 '{DB_FILE}' 中还没有数据，或数据加载失败。")
 else:
     # --- 4. 侧边栏筛选与排序 ---
     st.sidebar.header("筛选与排序")
@@ -125,16 +126,13 @@ else:
     st.write(f"共找到 **{len(filtered_df)}** 条相关情报")
     st.divider()
 
-    # --- 6. 主页面展示 (*** 全新卡片式布局 ***) ---
+    # --- 6. 主页面展示 (卡片式布局) ---
     for index, row in filtered_df.iterrows():
-        # 使用 st.container 创建每条新闻的独立卡片
         with st.container():
-            col1, col2 = st.columns([4, 1]) # 左侧宽，右侧窄
+            col1, col2 = st.columns([4, 1])
 
-            with col1: # 左侧内容
+            with col1:
                 st.markdown(f"#### {row['title']}")
-                
-                # 标签区域
                 st.markdown(
                     f"""
                     <span style='background-color:#E9ECEF; color:#495057; padding:3px 8px; border-radius:15px; font-size: 14px; margin-right: 10px;'>
@@ -145,14 +143,11 @@ else:
                     </span>
                     """, unsafe_allow_html=True
                 )
-                
-                # 来源和时间
                 created_time = row['created_at'].strftime('%Y-%m-%d %H:%M')
                 st.caption(f"来源: {row['source']} | 发布时间: {row['publish_date']} | 录入时间: {created_time}")
 
-            with col2: # 右侧内容
+            with col2:
                 score = row['value_score']
-                delta_color = "normal"
                 if score >= 8: delta_text, emoji = "高价值", "🔥"
                 elif score >= 5: delta_text, emoji = "中等价值", "💡"
                 else: delta_text, emoji = "一般价值", "📄"
@@ -160,11 +155,9 @@ else:
                 st.metric(
                     label="运营价值评估", 
                     value=f"{score}/10 {emoji}", 
-                    delta=delta_text,
-                    delta_color=delta_color
+                    delta=delta_text
                 )
 
-            # AI 评估理由和展开详情
             st.info(f"**AI评估理由:** {row['value_reason']}")
             
             with st.expander("查看AI摘要、关键词及原文链接"):
