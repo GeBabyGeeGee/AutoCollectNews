@@ -126,16 +126,19 @@ def search_google(query):
         tqdm.write(f"Google搜索请求失败: {e}")
         return []
 
-def get_article_text(url):
-    """*** 新增的核心功能：抓取并解析网页全文 ***"""
+def fetch_and_parse_article(url):
+    """
+    *** 升级版：抓取并解析网页，返回完整的article对象 ***
+    """
     try:
         article = Article(url, config=config, language='zh')
         article.download()
         article.parse()
-        return article.text
+        return article
     except Exception as e:
         tqdm.write(f"[抓取失败] 无法从 {url} 获取全文: {e}")
         return None
+
 
 def analyze_with_deepseek(title, full_text):
     """*** AI分析函数升级，现在分析的是全文 ***"""
@@ -208,22 +211,36 @@ def extract_metadata(item):
     author = metatags.get('author', '未知')
     return publish_date, author
 
-# --- 5. 核心工作流 ---
+# 用这个新函数替换掉旧的 process_article 函数
 def process_article(article_info):
     try:
         url = article_info.get('url')
         title = article_info.get('title')
+        google_publish_date = article_info.get('publish_date') # 从Google API获取的日期
 
-        # 第1步：抓取网页全文
-        full_text = get_article_text(url)
+        # 第1步：抓取并解析网页
+        article = fetch_and_parse_article(url)
+        if not article: return None
+
+        full_text = article.text
         
         if not full_text or len(full_text) < 200:
-            tqdm.write(f"[内容过短或抓取失败] 跳过: {title[:50]}...")
+            tqdm.write(f"[内容过短] 跳过: {title[:50]}...")
             return None
         
+        # --- 日期提取“双重保险”逻辑 ---
+        final_publish_date = "未知"
+        if google_publish_date and google_publish_date != "未知":
+            # 优先使用Google API的日期
+            final_publish_date = google_publish_date.split('T')[0] # 清理格式，只取年月日
+        elif article.publish_date:
+            # 如果Google没有，则使用newspaper提取的日期
+            final_publish_date = article.publish_date.strftime('%Y-%m-%d')
+        # -----------------------------
+
         truncated_text = full_text[:15000]
 
-        # 第2步：基于全文进行AI分析与过滤
+        # 第2步：基于全文进行AI分析与过滤 (逻辑不变)
         analysis_str = analyze_with_deepseek(title, truncated_text)
         if not analysis_str: return None
         
@@ -235,7 +252,7 @@ def process_article(article_info):
         
         summary = analysis.get('summary', '')
 
-        # 第3步：进行价值评估
+        # 第3步：进行价值评估 (逻辑不变)
         value_score, value_reason = 0, "评估失败"
         if summary:
             evaluation_str = evaluate_operational_value(summary, article_info.get('sub_category'))
@@ -246,15 +263,17 @@ def process_article(article_info):
         
         return {
             "title": title, "url": url,
-            "source": article_info.get('displayLink'), "publish_date": article_info.get('publish_date'),
+            "source": article_info.get('displayLink'), 
+            "publish_date": final_publish_date, # <-- 使用我们最终确定的日期
             "author": article_info.get('author'), "sub_category": article_info.get('sub_category'),
             "category": analysis.get('category', '其他'), "summary": summary,
             "keywords": ", ".join(analysis.get('keywords', [])),
             "value_score": value_score, "value_reason": value_reason
         }
     except (json.JSONDecodeError, KeyError, Exception) as e:
-        tqdm.write(f"[处理异常] 在处理 {article_info.get('url')} 时出错: {e}")
+        tqdm.write(f"[处理异常] 在处理 {url} 时出错: {e}")
         return None
+
 
 def job():
     print(f"[{time.ctime()}] 开始执行情报采集任务 (终极版)...")
