@@ -9,7 +9,7 @@ import json
 
 # --- 页面配置 ---
 st.set_page_config(
-    page_title="个护行业智能情报分析平台",
+    page_title="素材收集库",
     page_icon="💡",
     layout="wide",
     initial_sidebar_state="expanded"
