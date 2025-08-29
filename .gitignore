@@ -1,3 +1,4 @@
 # .gitignore 文件内容
 .env
 news_scraper.log
+maintest.py

@@ -62,7 +62,7 @@ class AppConfig:
         self.SEARCH_ENGINE_ID = os.getenv("SEARCH_ENGINE_ID")
         self.DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
         self.DB_FILE = 'news.db'
-        self.MAX_WORKERS = 5
+        self.MAX_WORKERS = 10
         self.REQUEST_TIMEOUT = 20
         self.RETRY_COUNT = 3
         self.RETRY_DELAY = 2
@@ -185,9 +185,6 @@ class SearchStrategyManager:
         {"category": "吹风机", "terms": ["高速吹风机", "hair dryer"]},
         {"category": "美容仪", "terms": ["美容仪", "beauty device", "RF beauty device", "microcurrent device"]},
         {"category": "按摩仪", "terms": ["筋膜枪", "massage gun"]},
-        {"category": "品牌-戴森", "terms": ["戴森", "Dyson"]},
-        {"category": "品牌-徕芬", "terms": ["徕芬", "Laifen"]},
-        {"category": "品牌-Therabody", "terms": ["Therabody", "Theragun"]},
     ]
     
     SEARCH_MODIFIERS = [
