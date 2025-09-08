@@ -2,3 +2,4 @@
 .env
 news_scraper.log
 maintest.py
+.venv
