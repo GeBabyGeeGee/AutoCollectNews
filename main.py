@@ -70,7 +70,9 @@ class AppConfig:
         if not all([self.GOOGLE_API_KEY, self.SEARCH_ENGINE_ID, self.DEEPSEEK_API_KEY]):
             raise ValueError("错误：必须在 .env 文件中设置 GOOGLE_API_KEY, SEARCH_ENGINE_ID, 和 DEEPSEEK_API_KEY")
             
-        self.DB_FILE = 'news.db'
+        # 关键: 构造数据库文件的绝对路径，确保无论从哪里运行脚本都能找到正确的文件
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        self.DB_FILE = os.path.join(script_dir, 'news.db')
         self.MAX_WORKERS = 10
         self.REQUEST_TIMEOUT = 20
         self.RETRY_COUNT = 3
